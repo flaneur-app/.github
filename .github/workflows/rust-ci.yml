@@ -1,0 +1,60 @@
+# Reusable Rust checks shared by every Flâneur Rust repository:
+#   jobs:
+#     rust:
+#       uses: flaneur-app/.github/.github/workflows/rust-ci.yml@main
+#       with:
+#         system-packages: libgtk-4-dev libadwaita-1-dev
+#
+# A repository without a Cargo.toml (docs only) passes without running cargo.
+name: Rust CI
+
+on:
+  workflow_call:
+    inputs:
+      system-packages:
+        description: Space-separated apt packages the build needs (GTK, GStreamer, SQLite, ...)
+        type: string
+        default: ""
+      deny:
+        description: Run cargo-deny (licenses, advisories, sources)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, nextest, deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Detect a Cargo workspace
+        id: detect
+        run: |
+          if [ -f Cargo.toml ]; then echo "cargo=true" >> "$GITHUB_OUTPUT"; else echo "cargo=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Install system packages
+        if: steps.detect.outputs.cargo == 'true' && inputs.system-packages != ''
+        env:
+          PACKAGES: ${{ inputs.system-packages }}
+        run: |
+          sudo apt-get update -qq
+          # shellcheck disable=SC2086 # word splitting is the point: one argument per package
+          sudo apt-get install -y -qq --no-install-recommends $PACKAGES
+      # rustup installs the toolchain pinned in rust-toolchain.toml on first use.
+      - if: steps.detect.outputs.cargo == 'true'
+        run: rustup show active-toolchain || rustup toolchain install
+      - if: steps.detect.outputs.cargo == 'true'
+        uses: Swatinem/rust-cache@v2
+      - if: steps.detect.outputs.cargo == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - if: steps.detect.outputs.cargo == 'true'
+        run: cargo fmt --all --check
+      - if: steps.detect.outputs.cargo == 'true'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - if: steps.detect.outputs.cargo == 'true'
+        run: cargo nextest run --workspace --locked --no-tests=pass
+      - if: steps.detect.outputs.cargo == 'true' && inputs.deny
+        run: cargo deny check
